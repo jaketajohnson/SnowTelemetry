@@ -1,0 +1,4 @@
+# Ignore GDBs, PyCharm files, and logs
+*.gdb
+*.idea
+*.log
