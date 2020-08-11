@@ -181,6 +181,13 @@ def Telemetry():
         except NameError:
             print(tbinfo)
 
+    except arcpy.ExecuteError:
+        try:
+            tbinfo = traceback.format_exc(2)
+            logger.error(tbinfo)
+        except NameError:
+            print(arcpy.GetMessages(2))
+
     except:
         logger.exception("Picked up an exception:")
 
