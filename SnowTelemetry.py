@@ -19,6 +19,12 @@
      4. Calculate each field while looping through route types, each loop creating a new layer
      5. Merge all route types into one large layer
 
+     Precipitation Forecast
+     1. Grab the precipitation accumulation forecast service
+     2. Prepare service layer with dissolve and add a field
+     3. Classify precipitation amounts
+     4. Calculate score
+
  REQUIREMENTS
 
      Python 3
@@ -71,19 +77,28 @@ def start_rotating_logging(log_file=None, max_bytes=100000, backup_count=1, supp
 
 
 def Telemetry():
+
     # Environment
     arcpy.env.overwriteOutput = True
     spatial_reference = arcpy.SpatialReference(3436)
 
-    # Paths
+    # Folders
     fgdb_folder = r"F:\Shares\FGDB_Services"
     database_connections = os.path.join(fgdb_folder, "DatabaseConnections")
+
+    # Connection files
     db_view = os.path.join(database_connections, r"COSPW@AVL@MCWINTCWDB.sde")
     sde = os.path.join(database_connections, r"COSPW@imSPFLD@MCWINTCWDB.sde")
     roadway_information = os.path.join(sde, r"imSPFLD.COSPW.FacilitiesStreets\imSPFLD.COSPW.RoadwayInformation")
+
+    # Datasets
     data = os.path.join(fgdb_folder, "Data")
     telemetry = os.path.join(data, "Telemetry.gdb")
     snow_dataset = os.path.join(telemetry, "Snow")
+
+    # Snow tracks
+    avl_24 = os.path.join(telemetry, "avl_24")
+    avl_plow_lines = os.path.join(snow_dataset, "avlPlowLines")
     dissolved_routes = os.path.join(snow_dataset, "DissolvedRoutes")
     dissolved_routes_temp = os.path.join(snow_dataset, "DissolvedRoutesTemp")
     avl_plow_traffic_all_dest = os.path.join(snow_dataset, "avlPlowTrafficAll")
@@ -92,28 +107,23 @@ def Telemetry():
     avl_plow_traffic_3_dest = os.path.join(snow_dataset, "avlPlowTraffic3")  # Sections - Mains
     avl_plow_traffic_4_dest = os.path.join(snow_dataset, "avlPlowTraffic4")  # Sections - Neighborhoods
 
-    # Snow Tracks GDB Paths
-    avl_24 = os.path.join(telemetry, "avl_24")
-    avl_plow_lines = os.path.join(snow_dataset, "avlPlowLines")
-
-    # View paths
+    # Move raw plow data into a working GDB
     avl_table = os.path.join(db_view, r"AVL.dbo.vw_AVLplow24")
     arcpy.MakeFeatureLayer_management(avl_table, "avlTable", "TEMPORAL < 25 and spd <= 35")
     arcpy.FeatureClassToFeatureClass_conversion("avlTable", telemetry, "avl_24")
 
     def SnowLines():
-
-        # AVL points to lines
+        """Convert AVL points to lines"""
         arcpy.MakeXYEventLayer_management(avl_24, "lon", "lat", "avlPlowPoints", spatial_reference)
         arcpy.FeatureClassToFeatureClass_conversion("avlPlowPoints", snow_dataset, "avlPlowPoints")
         arcpy.PointsToLine_management("avlPlowPoints", avl_plow_lines, "unitName", "datetime", "NO_CLOSE")
 
     def RouteStats():
+        """Add statistics fields and statistics to the new lines"""
 
         # Create new routes then save to the GDB
-        arcpy.MakeFeatureLayer_management(roadway_information, "RoadwayInformation",
-                                          "SNOW_FID <> 'NORTE'")
-        arcpy.Dissolve_management("RoadwayInformation", dissolved_routes, ["SNOW_DIST", "SNOW_TYPE", "ROAD_NAME"], "LN_TOTALMI SUM")
+        arcpy.MakeFeatureLayer_management(roadway_information, "RoadwayInformation", "SNOW_FID <> 'NORTE'")
+        arcpy.Dissolve_management("RoadwayInformation", dissolved_routes, ["SNOW_DIST", "SNOW_TYPE", "ROAD_NAME"], "LN_TOTALMI SUM", unsplit_lines="UNSPLIT_LINES")
         arcpy.MakeFeatureLayer_management(dissolved_routes, "DissolvedRoutes")
 
         # Add/calculate fields
@@ -142,10 +152,14 @@ def Telemetry():
 
             # Find maximum dotsperlanemile value per route type
             maximum = 0.0
-            with arcpy.da.SearchCursor("DissolvedRoutesTemp", "dotsperlanemile") as cursor:
+            clause = (None, "ORDER BY dotsperlanemile DESC")
+            with arcpy.da.SearchCursor("DissolvedRoutesTemp", "dotsperlanemile", sql_clause=clause) as cursor:
                 for row in cursor:
-                    if row[0] > maximum:
-                        maximum = row[0]
+                    maximum = row[0]
+                    if maximum != 0.0:
+                        break
+            del cursor
+
             arcpy.CalculateFields_management("DissolvedRoutesTemp", "PYTHON3",
                                              [["dotsperlanemilemax", f"{maximum}"],
                                               ["percentage", "(!dotsperlanemile!/!dotsperlanemilemax!)*100"],
@@ -156,6 +170,46 @@ def Telemetry():
         # Merge the sum tables into one new layer
         arcpy.Merge_management([avl_plow_traffic_1_dest, avl_plow_traffic_2_dest, avl_plow_traffic_3_dest, avl_plow_traffic_4_dest], avl_plow_traffic_all_dest)
         arcpy.Delete_management(dissolved_routes_temp)
+
+    def PrecipitationForecast():
+        """Calculate the severity of a snow event on each snow route"""
+
+        # National Weather Service Precipitation Forecast, Cumulative Total
+        service = "https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/NDFD_Precipitation_v1/FeatureServer/2"
+        # TODO: Switch to snow map when finished
+
+        # Paths
+        cumulative = os.path.join(snow_dataset, "CumulativeTotal")
+
+        # Preparing layers
+        arcpy.AddFields_management(avl_plow_traffic_all_dest, [["Forecast", "TEXT", "Forecast", 20, "0"],
+                                                               ["Severity", "SHORT", "Severity", 1, 0]])
+        arcpy.Dissolve_management(service, cumulative, "label")
+        arcpy.MakeFeatureLayer_management(avl_plow_traffic_all_dest, "avl_all")
+        arcpy.MakeFeatureLayer_management(cumulative, "Cumulative")
+        arcpy.CalculateField_management("avl_all", "Forecast", "'0 to 0 inches'")
+
+        # Expressions
+        severities = [["Forecast IS NULL or Forecast = '0 to 0 inches'", "0"],
+                      ["Forecast IN ('0.01 to 0.10 inches', '0.10 to 0.25 inches', '0.50 to 0.75 inches', '0.25 to 0.50 inches', '0.75 to 1.00 inches')", "1"],
+                      ["Forecast IN ('1.00 to 1.50 inches', '1.50 to 2.00 inches')", "2"],
+                      ["Forecast IN ('2.00 to 2.50 inches', '2.50 to 3.00 inches')", "3"],
+                      ["Forecast = '3.00 to 4.00 inches'", "4"],
+                      ["Forecast = '4.00 to 5.00 inches'", "5"],
+                      ["Forecast = '5.00 to 6.00 inches'", "6"],
+                      ["Forecast = '6.00 to 7.00 inches'", "7"],
+                      ["Forecast = '7.00 to 8.00 inches'", "8"]]
+
+        # Analysis
+        with arcpy.da.UpdateCursor("Cumulative", "label") as cursor:
+            for row in cursor:
+                selected_cumulative = arcpy.SelectLayerByAttribute_management("Cumulative", "NEW_SELECTION", f"label = '{row[0]}'")
+                selected_avl = arcpy.SelectLayerByLocation_management("avl_all", "HAVE_THEIR_CENTER_IN", selected_cumulative)
+                arcpy.CalculateField_management(selected_avl, "Forecast", f"'{row[0]}'", "PYTHON3")
+
+        for severity in severities:
+            selected_avl = arcpy.SelectLayerByAttribute_management("avl_all", "NEW_SELECTION", severity[0])
+            arcpy.CalculateField_management(selected_avl, "Severity", severity[1], "PYTHON3")
 
     # Run the above functions with logger error catching and formatting
 
@@ -173,6 +227,10 @@ def Telemetry():
         logger.info("--- --- --- --- Route Stats Start")
         RouteStats()
         logger.info("--- --- --- --- Route Stats Complete")
+
+        logger.info("--- --- --- --- Precipitation Forecast Start")
+        PrecipitationForecast()
+        logger.info("--- --- --- --- Precipitation Forecast Complete")
 
     except (IOError, KeyError, NameError, IndexError, TypeError, UnboundLocalError):
         tbinfo = traceback.format_exc()
