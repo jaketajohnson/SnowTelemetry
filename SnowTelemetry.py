@@ -36,47 +36,35 @@ import logging
 import os
 import sys
 import traceback
-from logging.handlers import RotatingFileHandler
 
 
-def start_rotating_logging(log_file=None, max_bytes=100000, backup_count=1, suppress_requests_messages=True):
-    """Creates a logger that outputs to stdout and a log file; outputs start and completion of functions or attribution of functions"""
-
-    formatter = logging.Formatter(fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-
-    # Paths to desired log file
-    script_folder = os.path.dirname(sys.argv[0])
-    script_name = os.path.basename(sys.argv[0])
-    script_name_no_ext = os.path.splitext(script_name)[0]
-    log_folder = os.path.join(script_folder, "Log_Files")
-    if not log_file:
-        log_file = os.path.join(log_folder, f"{script_name_no_ext}.log")
-
-    # Start logging
-    the_logger = logging.getLogger(script_name)
-    the_logger.setLevel(logging.DEBUG)
-
-    # Add the rotating file handler
-    log_handler = RotatingFileHandler(filename=log_file, maxBytes=max_bytes, backupCount=backup_count)
-    log_handler.setLevel(logging.DEBUG)
-    log_handler.setFormatter(formatter)
-    the_logger.addHandler(log_handler)
-
-    # Add the console handler
+def ScriptLogging():
+    """Enables console and log file logging; see test script for comments on functionality"""
+    current_directory = os.getcwd()
+    script_filename = os.path.basename(sys.argv[0])
+    log_filename = os.path.splitext(script_filename)[0]
+    log_file = os.path.join(current_directory, f"{log_filename}.log")
+    if not os.path.exists(log_file):
+        with open(log_file, "w"):
+            pass
+    message_formatting = "%(asctime)s - %(levelname)s - %(message)s"
+    date_formatting = "%Y-%m-%d %H:%M:%S"
+    formatter = logging.Formatter(fmt=message_formatting, datefmt=date_formatting)
+    logging_output = logging.getLogger(f"{log_filename}")
+    logging_output.setLevel(logging.INFO)
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
-    the_logger.addHandler(console_handler)
-
-    # Suppress SSL warnings in logs if instructed to
-    if suppress_requests_messages:
-        logging.getLogger("requests").setLevel(logging.WARNING)
-        logging.getLogger("urllib3").setLevel(logging.WARNING)
-
-    return the_logger
+    logging_output.addHandler(console_handler)
+    logging.basicConfig(format=message_formatting, datefmt=date_formatting, filename=log_file, filemode="w", level=logging.INFO)
+    return logging_output
 
 
 def Telemetry():
+
+    # Logging
+    logger = ScriptLogging()
+    logger.info("Script Execution Start")
 
     # Environment
     arcpy.env.overwriteOutput = True
@@ -108,18 +96,21 @@ def Telemetry():
     avl_plow_traffic_4_dest = os.path.join(snow_dataset, "avlPlowTraffic4")  # Sections - Neighborhoods
 
     # Move raw plow data into a working GDB
-    avl_table = os.path.join(db_view, r"AVL.dbo.vw_AVLplow24")
+    avl_table = os.path.join(db_view, r"AVL.dbo.vw_AVLpLow24")
     arcpy.MakeFeatureLayer_management(avl_table, "avlTable", "TEMPORAL < 25 and spd <= 35")
     arcpy.FeatureClassToFeatureClass_conversion("avlTable", telemetry, "avl_24")
 
     def SnowLines():
         """Convert AVL points to lines"""
+        logger.info("Snow Lines Start")
         arcpy.MakeXYEventLayer_management(avl_24, "lon", "lat", "avlPlowPoints", spatial_reference)
         arcpy.FeatureClassToFeatureClass_conversion("avlPlowPoints", snow_dataset, "avlPlowPoints")
         arcpy.PointsToLine_management("avlPlowPoints", avl_plow_lines, "unitName", "datetime", "NO_CLOSE")
+        logger.info("Snow Lines Complete")
 
     def RouteStats():
         """Add statistics fields and statistics to the new lines"""
+        logger.info("Route Stats Start")
 
         # Create new routes then save to the GDB
         arcpy.MakeFeatureLayer_management(roadway_information, "RoadwayInformation", "SNOW_FID <> 'NORTE'")
@@ -170,9 +161,11 @@ def Telemetry():
         # Merge the sum tables into one new layer
         arcpy.Merge_management([avl_plow_traffic_1_dest, avl_plow_traffic_2_dest, avl_plow_traffic_3_dest, avl_plow_traffic_4_dest], avl_plow_traffic_all_dest)
         arcpy.Delete_management(dissolved_routes_temp)
+        logger.info("Route Stats Complete")
 
     def PrecipitationForecast():
         """Calculate the severity of a snow event on each snow route"""
+        logger.info("Forecast Start")
 
         # National Weather Service Precipitation Forecast, Cumulative Total
         service = "https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/NDFD_Precipitation_v1/FeatureServer/2"
@@ -210,49 +203,29 @@ def Telemetry():
         for severity in severities:
             selected_avl = arcpy.SelectLayerByAttribute_management("avl_all", "NEW_SELECTION", severity[0])
             arcpy.CalculateField_management(selected_avl, "Severity", severity[1], "PYTHON3")
+    logger.info("Forecast Complete")
 
-    # Run the above functions with logger error catching and formatting
-
-    logger = start_rotating_logging()
-
+    # Try running above scripts
     try:
-
-        logger.info("")
-        logger.info("--- Script Execution Started ---")
-
-        logger.info("--- --- --- --- Snow Lines Start")
         SnowLines()
-        logger.info("--- --- --- --- Snow Lines Complete")
-
-        logger.info("--- --- --- --- Route Stats Start")
         RouteStats()
-        logger.info("--- --- --- --- Route Stats Complete")
-
-        logger.info("--- --- --- --- Precipitation Forecast Start")
         PrecipitationForecast()
-        logger.info("--- --- --- --- Precipitation Forecast Complete")
-
-    except (IOError, KeyError, NameError, IndexError, TypeError, UnboundLocalError):
-        tbinfo = traceback.format_exc()
+    except (IOError, KeyError, NameError, IndexError, TypeError, UnboundLocalError, ValueError):
+        traceback_info = traceback.format_exc()
         try:
-            logger.error(tbinfo)
+            logger.info(traceback_info)
         except NameError:
-            print(tbinfo)
-
+            print(traceback_info)
     except arcpy.ExecuteError:
         try:
-            tbinfo = traceback.format_exc(2)
-            logger.error(tbinfo)
+            logger.error(arcpy.GetMessages(2))
         except NameError:
             print(arcpy.GetMessages(2))
-
     except:
-        logger.exception("Picked up an exception:")
-
+        logger.exception("Picked up an exception!")
     finally:
         try:
-            logger.info("--- Script Execution Completed ---")
-            logging.shutdown()
+            logger.info("Script Execution Complete")
         except NameError:
             pass
 
