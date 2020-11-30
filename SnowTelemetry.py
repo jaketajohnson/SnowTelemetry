@@ -63,6 +63,16 @@ def ScriptLogging():
 def Telemetry():
 
     # Logging
+    def logging_lines(name):
+        """Use this wrapper to insert a message before and after the function for logging purposes"""
+        if type(name) == str:
+            def logging_decorator(function):
+                def logging_wrapper():
+                    logger.info(f"{name} Start")
+                    function()
+                    logger.info(f"{name} Complete")
+                return logging_wrapper
+            return logging_decorator
     logger = ScriptLogging()
     logger.info("Script Execution Start")
 
@@ -100,17 +110,16 @@ def Telemetry():
     arcpy.MakeFeatureLayer_management(avl_table, "avlTable", "TEMPORAL < 25 and spd <= 35")
     arcpy.FeatureClassToFeatureClass_conversion("avlTable", telemetry, "avl_24")
 
-    def SnowLines():
+    @logging_lines("Snow Lines")
+    def snow_lines():
         """Convert AVL points to lines"""
-        logger.info("Snow Lines Start")
         arcpy.MakeXYEventLayer_management(avl_24, "lon", "lat", "avlPlowPoints", spatial_reference)
         arcpy.FeatureClassToFeatureClass_conversion("avlPlowPoints", snow_dataset, "avlPlowPoints")
         arcpy.PointsToLine_management("avlPlowPoints", avl_plow_lines, "unitName", "datetime", "NO_CLOSE")
-        logger.info("Snow Lines Complete")
 
-    def RouteStats():
+    @logging_lines("Route Stats")
+    def route_stats():
         """Add statistics fields and statistics to the new lines"""
-        logger.info("Route Stats Start")
 
         # Create new routes then save to the GDB
         arcpy.MakeFeatureLayer_management(roadway_information, "RoadwayInformation", "SNOW_FID <> 'NORTE'")
@@ -156,15 +165,14 @@ def Telemetry():
                                               ["percentage", "(!dotsperlanemile!/!dotsperlanemilemax!)*100"],
                                               ["log_percentage", "math.log1p(!percentage!)"]])
             arcpy.FeatureClassToFeatureClass_conversion("DissolvedRoutesTemp", snow_dataset, f"{snow_type[2]}")
-            logger.info(f"--- --- {snow_type[2]} Complete")
+            logger.info(f"{snow_type[2]} Complete")
 
         # Merge the sum tables into one new layer
         arcpy.Merge_management([avl_plow_traffic_1_dest, avl_plow_traffic_2_dest, avl_plow_traffic_3_dest, avl_plow_traffic_4_dest], avl_plow_traffic_all_dest)
         arcpy.Delete_management(dissolved_routes_temp)
-        logger.info("Route Stats Complete")
 
-    def PrecipitationForecast():
-        """Calculate the severity of a snow event on each snow route"""
+    """def PrecipitationForecast():
+        Calculate the severity of a snow event on each snow route
         logger.info("Forecast Start")
 
         # National Weather Service Precipitation Forecast, Cumulative Total
@@ -203,13 +211,12 @@ def Telemetry():
         for severity in severities:
             selected_avl = arcpy.SelectLayerByAttribute_management("avl_all", "NEW_SELECTION", severity[0])
             arcpy.CalculateField_management(selected_avl, "Severity", severity[1], "PYTHON3")
-    logger.info("Forecast Complete")
+    logger.info("Forecast Complete")"""
 
     # Try running above scripts
     try:
-        SnowLines()
-        RouteStats()
-        PrecipitationForecast()
+        snow_lines()
+        route_stats()
     except (IOError, KeyError, NameError, IndexError, TypeError, UnboundLocalError, ValueError):
         traceback_info = traceback.format_exc()
         try:
