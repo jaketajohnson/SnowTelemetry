@@ -110,14 +110,14 @@ def Telemetry():
     arcpy.FeatureClassToFeatureClass_conversion("avlTable48", telemetry, "avl_48")
 
     @logging_lines("Snow Lines")
-    def snow_lines():
+    def SnowLines():
         """Convert AVL points to lines"""
         arcpy.MakeXYEventLayer_management(avl_24, "lon", "lat", "avlPlowPoints", spatial_reference)
         arcpy.FeatureClassToFeatureClass_conversion("avlPlowPoints", snow_dataset, "avlPlowPoints")
         arcpy.PointsToLine_management("avlPlowPoints", avl_plow_lines, "unitName", "datetime", "NO_CLOSE")
 
     @logging_lines("Route Stats")
-    def route_stats():
+    def RouteStats():
         """Add statistics fields and statistics to the new lines"""
 
         # Create new routes then save to the GDB
@@ -171,22 +171,22 @@ def Telemetry():
         arcpy.Delete_management(dissolved_routes_temp)
 
     @logging_lines("Simple AVL Points")
-    def simple_avl_points():
+    def SimplePoints():
         """Simplify AVL points into one feature for display on a web map"""
         arcpy.Dissolve_management("avlTable48", avl_48_simple, "Temporal")
 
     @logging_lines("Simple Routes")
-    def simple_routes():
+    def SimpleRoutes():
         """Simplify snow routes by district and priority for display on a web map"""
         arcpy.MakeFeatureLayer_management(roadway_information, "RoadwayInformation", "SNOW_FID <> 'NORTE'")
         arcpy.Dissolve_management("RoadwayInformation", dissolved_routes_simple, ["SNOW_DIST", "SNOW_TYPE"])
 
     # Try running above scripts
     try:
-        snow_lines()
-        route_stats()
-        simple_avl_points()
-        simple_routes()
+        SnowLines()
+        RouteStats()
+        SimplePoints()
+        SimpleRoutes()
     except (IOError, KeyError, NameError, IndexError, TypeError, UnboundLocalError, ValueError):
         traceback_info = traceback.format_exc()
         try:
